@@ -6,6 +6,7 @@ import PDFKit
 import PhotosUI
 import UniformTypeIdentifiers
 
+// MARK: - Phase 1: Image Intelligence & OCR Document Ingest Sheet
 struct DocumentIngestSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -15,7 +16,7 @@ struct DocumentIngestSheet: View {
     @State private var showPDFImporter = false
     @State private var rawExtractedText = ""
 
-    // Auto-analysis state
+    // Auto-analysis state (Phase 1 & 2)
     @State private var isProcessing = false
     @State private var analyzedResult: DocumentAutoCategorizer.AnalyzedResult? = nil
     @State private var showReviewForm = false
@@ -36,161 +37,14 @@ struct DocumentIngestSheet: View {
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 20) {
-                        // Section: 3 Top Action Tiles matching "Add to Chat" reference screenshot exactly!
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("ADD DOCUMENT")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 4)
+                        addDocumentSection
 
-                            HStack(spacing: 12) {
-                                // 1. Camera Tile
-                                Button {
-                                    if VNDocumentCameraViewController.isSupported {
-                                        showCameraScanner = true
-                                    } else {
-                                        // Simulator fallback
-                                        processDocumentText("WARRANTY CARD: Apple MacBook Pro\nSERIAL NO: SN-MBP99214\nPRICE: 249900\nEXPIRY: 2027-10-24")
-                                    }
-                                } label: {
-                                    ActionTileButton(icon: "camera", label: "Camera")
-                                }
-
-                                // 2. Photos Tile
-                                PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                                    ActionTileButton(icon: "photo", label: "Photos")
-                                }
-
-                                // 3. Files Tile
-                                Button {
-                                    showPDFImporter = true
-                                } label: {
-                                    ActionTileButton(icon: "folder", label: "Files")
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 10)
-
-                        // If processing auto-scan pipeline
                         if isProcessing {
-                            VStack(spacing: 12) {
-                                ProgressView()
-                                    .controlSize(.regular)
-                                Text("Analyzing document with on-device intelligence...")
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 32)
-                            .background(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .fill(Color(uiColor: .secondarySystemGroupedBackground))
-                            )
-                            .padding(.horizontal, 16)
+                            processingSection
                         }
 
-                        // Auto-Categorized Review Card (Phase 2 & Phase 9)
                         if showReviewForm, let analyzed = analyzedResult {
-                            VStack(alignment: .leading, spacing: 14) {
-                                HStack {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "checkmark.seal.fill")
-                                            .foregroundStyle(.green)
-                                        Text("AUTO-CATEGORIZED")
-                                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                            .foregroundStyle(.green)
-                                    }
-
-                                    Spacer()
-
-                                    Text(draftKind.rawValue)
-                                        .font(.system(size: 12, weight: .bold))
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 4)
-                                        .background(Color(uiColor: .systemGray5))
-                                        .clipShape(Capsule())
-                                }
-
-                                // Grouped list container with thin dividers (reference screenshot style)
-                                VStack(spacing: 0) {
-                                    ReviewRow(title: "Title", text: $draftTitle)
-                                    Divider().padding(.leading, 16)
-
-                                    ReviewRow(title: "Amount (₹)", text: $draftAmount, keyboardType: .decimalPad)
-                                    Divider().padding(.leading, 16)
-
-                                    ReviewRow(title: "Serial / Reference", text: $draftSerial)
-                                    Divider().padding(.leading, 16)
-
-                                    HStack {
-                                        Text("Date")
-                                            .font(.system(size: 14))
-                                            .foregroundStyle(.secondary)
-                                        Spacer()
-                                        DatePicker("", selection: $draftDate, displayedComponents: .date)
-                                            .labelsHidden()
-                                    }
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 10)
-
-                                    if draftKind == .warranty {
-                                        Divider().padding(.leading, 16)
-                                        HStack {
-                                            Text("Warranty Expiry")
-                                                .font(.system(size: 14))
-                                                .foregroundStyle(.secondary)
-                                            Spacer()
-                                            DatePicker("", selection: $draftExpiry, displayedComponents: .date)
-                                                .labelsHidden()
-                                        }
-                                        .padding(.horizontal, 16)
-                                        .padding(.vertical, 10)
-                                    }
-                                }
-                                .background(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .fill(Color(uiColor: .systemBackground))
-                                )
-
-                                // Auto-Event notice
-                                if analyzed.expiryDate != nil || !analyzed.foundDates.isEmpty {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "calendar.badge.clock")
-                                            .font(.system(size: 14))
-                                            .foregroundStyle(.blue)
-                                        Text("Calendar event & reminder will be auto-created on save.")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .padding(.horizontal, 4)
-                                }
-
-                                // Save button: soft tile style
-                                Button {
-                                    saveVerifiedDocument()
-                                } label: {
-                                    HStack {
-                                        Spacer()
-                                        Image(systemName: "checkmark")
-                                            .font(.system(size: 14, weight: .bold))
-                                        Text("Save to Vault")
-                                            .font(.system(size: 15, weight: .semibold))
-                                        Spacer()
-                                    }
-                                    .padding(.vertical, 14)
-                                    .background(Color.primary)
-                                    .foregroundStyle(Color(uiColor: .systemBackground))
-                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                }
-                                .padding(.top, 4)
-                            }
-                            .padding(16)
-                            .background(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .fill(Color(uiColor: .secondarySystemGroupedBackground))
-                            )
-                            .padding(.horizontal, 16)
+                            reviewCard(analyzed: analyzed)
                         }
                     }
                     .padding(.bottom, 32)
@@ -226,6 +80,190 @@ struct DocumentIngestSheet: View {
         }
     }
 
+    // MARK: - View Components
+    private var addDocumentSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("ADD DOCUMENT")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+
+            HStack(spacing: 12) {
+                Button {
+                    if VNDocumentCameraViewController.isSupported {
+                        showCameraScanner = true
+                    } else {
+                        processDocumentText("WARRANTY CARD: Apple MacBook Pro\nSERIAL NO: SN-MBP99214\nPRICE: 249900\nEXPIRY: 2027-10-24")
+                    }
+                } label: {
+                    ActionTileButton(icon: "camera", label: "Camera")
+                }
+
+                PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                    ActionTileButton(icon: "photo", label: "Photos")
+                }
+
+                Button {
+                    showPDFImporter = true
+                } label: {
+                    ActionTileButton(icon: "folder", label: "Files")
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+    }
+
+    private var processingSection: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.regular)
+            Text("Analyzing image with on-device intelligence...")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 32)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+        )
+        .padding(.horizontal, 16)
+    }
+
+    @ViewBuilder
+    private func reviewCard(analyzed: DocumentAutoCategorizer.AnalyzedResult) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                    Text("AUTO-CATEGORIZED")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.green)
+                }
+
+                Spacer()
+
+                Text(draftKind.rawValue)
+                    .font(.system(size: 12, weight: .bold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color(uiColor: .systemGray5))
+                    .clipShape(Capsule())
+            }
+
+            VStack(spacing: 0) {
+                ReviewRow(title: "Title", text: $draftTitle)
+                Divider().padding(.leading, 16)
+
+                ReviewRow(title: "Amount (₹)", text: $draftAmount, keyboardType: .decimalPad)
+                Divider().padding(.leading, 16)
+
+                ReviewRow(title: "Serial / Reference", text: $draftSerial)
+                Divider().padding(.leading, 16)
+
+                HStack {
+                    Text("Date")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    DatePicker("", selection: $draftDate, displayedComponents: .date)
+                        .labelsHidden()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+
+                if draftKind == .warranty {
+                    Divider().padding(.leading, 16)
+                    HStack {
+                        Text("Warranty Expiry")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        DatePicker("", selection: $draftExpiry, displayedComponents: .date)
+                            .labelsHidden()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(uiColor: .systemBackground))
+            )
+
+            if !analyzed.summary.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("EVENT & DATE SUMMARY")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Text(analyzed.summary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(uiColor: .systemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+
+            statusNoticeView(analyzed: analyzed)
+
+            Button {
+                saveVerifiedDocument()
+            } label: {
+                HStack {
+                    Spacer()
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 14, weight: .bold))
+                    Text("Save to Vault")
+                        .font(.system(size: 15, weight: .semibold))
+                    Spacer()
+                }
+                .padding(.vertical, 14)
+                .background(Color.primary)
+                .foregroundStyle(Color(uiColor: .systemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .padding(.top, 4)
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+        )
+        .padding(.horizontal, 16)
+    }
+
+    @ViewBuilder
+    private func statusNoticeView(analyzed: DocumentAutoCategorizer.AnalyzedResult) -> some View {
+        let permManager = ToolPermissionManager.shared
+        if permManager.isDenied(tool: .calendar) && permManager.isDenied(tool: .reminders) {
+            HStack(spacing: 8) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                Text("Apple Calendar & Reminders tools are currently denied in Tool Permissions.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 4)
+        } else if analyzed.expiryDate != nil || !analyzed.foundDates.isEmpty {
+            HStack(spacing: 8) {
+                Image(systemName: "calendar.badge.clock")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.blue)
+                Text("Calendar event & reminder will be synchronized natively to iOS.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 4)
+        }
+    }
+
+    // MARK: - Phase 1: High Accuracy Vision OCR
     private func recognizeTextFromImage(_ image: UIImage) {
         isProcessing = true
         guard let cgImage = image.cgImage else { isProcessing = false; return }
@@ -239,6 +277,7 @@ struct DocumentIngestSheet: View {
             }
         }
         request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         try? handler.perform([request])
     }
@@ -259,6 +298,7 @@ struct DocumentIngestSheet: View {
         processDocumentText(fullText)
     }
 
+    // MARK: - Phase 1 & 2: Process & Extract Structured Intelligence
     private func processDocumentText(_ text: String) {
         self.rawExtractedText = text
         let result = DocumentAutoCategorizer.analyze(text: text)
@@ -276,6 +316,7 @@ struct DocumentIngestSheet: View {
         }
     }
 
+    // MARK: - Phase 3 & 4: Save Verified Document & Native Apple Integration
     private func saveVerifiedDocument() {
         let amount = Double(draftAmount) ?? 0
         let doc = FolioDocument(
@@ -292,37 +333,51 @@ struct DocumentIngestSheet: View {
             isVerified: true
         )
 
-        // Phase 9: Run Swiggy-style multi-phase Dynamic Island live activity!
+        // Dismiss sheet
         dismiss()
 
+        // Phase 3 & 4: Save & Apple System Integration via Dynamic Island pipeline
         DynamicIslandManager.shared.runAutoScanPipeline {
             modelContext.insert(doc)
             try? modelContext.save()
 
-            // Phase 9 Auto-creation of Calendar event / Reminder if dates found
-            if let exp = doc.expiryDate {
-                AgentSystemWriteService.scheduleCalendarEvent(
-                    title: "Warranty Expiry: \(doc.title)",
-                    date: exp,
-                    notes: "Serial: \(doc.serialOrInvoiceNo). Auto-scheduled by Folio on-device intelligence."
-                )
-                AgentSystemWriteService.scheduleReminder(
-                    title: "Check Warranty Status: \(doc.title)",
-                    date: exp,
-                    notes: "Expires soon (Serial: \(doc.serialOrInvoiceNo))."
-                )
-            } else if doc.documentDate > Date.now {
-                AgentSystemWriteService.scheduleCalendarEvent(
-                    title: "Due Date: \(doc.title)",
-                    date: doc.documentDate,
-                    notes: "Auto-scheduled from verified document."
-                )
+            Task { @MainActor in
+                let permManager = ToolPermissionManager.shared
+                let integration = AppleSystemIntegrationService.shared
+
+                // Calendar event creation with duplicate detection
+                if !permManager.isDenied(tool: .calendar) {
+                    if let exp = doc.expiryDate {
+                        let calTitle = "Warranty Expiry: \(doc.title)"
+                        let notes = "Serial: \(doc.serialOrInvoiceNo). Auto-scheduled by Folio on-device intelligence."
+                        let res = await integration.createCalendarEvent(title: calTitle, date: exp, notes: notes)
+                        if case .success(let saveInfo) = res {
+                            DynamicIslandManager.shared.showCompletion(title: "Event Scheduled", subtitle: "\(saveInfo.title) on \(saveInfo.calendarName)", isSuccess: true)
+                        }
+                    } else if doc.documentDate > Date.now {
+                        let calTitle = "Due Date: \(doc.title)"
+                        let notes = "Auto-scheduled from verified document \(doc.serialOrInvoiceNo)."
+                        let res = await integration.createCalendarEvent(title: calTitle, date: doc.documentDate, notes: notes)
+                        if case .success(let saveInfo) = res {
+                            DynamicIslandManager.shared.showCompletion(title: "Event Scheduled", subtitle: "\(saveInfo.title) on \(saveInfo.calendarName)", isSuccess: true)
+                        }
+                    }
+                }
+
+                // Reminders creation
+                if !permManager.isDenied(tool: .reminders) {
+                    if let exp = doc.expiryDate {
+                        let remTitle = "Check Warranty: \(doc.title)"
+                        let remNotes = "Expires soon (Serial: \(doc.serialOrInvoiceNo))."
+                        _ = await integration.createReminder(title: remTitle, dueDate: exp, notes: remNotes)
+                    }
+                }
             }
         }
     }
 }
 
-// Action Tile Button: matching reference screenshot exactly (rounded soft-grey tile, icon over label)
+// MARK: - Action Tile Button (Mobbin UI)
 struct ActionTileButton: View {
     let icon: String
     let label: String
@@ -371,6 +426,7 @@ struct ReviewRow: View {
     }
 }
 
+// MARK: - Vision Document Camera Controller
 struct VisionCameraScannerView: UIViewControllerRepresentable {
     var onTextScanned: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -406,6 +462,7 @@ struct VisionCameraScannerView: UIViewControllerRepresentable {
                     group.leave()
                 }
                 req.recognitionLevel = .accurate
+                req.usesLanguageCorrection = true
                 try? VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([req])
             }
 

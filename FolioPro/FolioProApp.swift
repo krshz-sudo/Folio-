@@ -98,6 +98,7 @@ struct DashboardView: View {
     @Binding var showScanner: Bool
     @Binding var showVault: Bool
     @Binding var appTheme: String
+    @State private var showPermissionsSheet = false
 
     var body: some View {
         NavigationStack {
@@ -198,6 +199,20 @@ struct DashboardView: View {
             .navigationTitle("Dashboard")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // Phase 4: Tool Permissions Policy Gate Toggle
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showPermissionsSheet = true
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.primary)
+                            .frame(width: 32, height: 32)
+                            .background(Color(uiColor: .secondarySystemGroupedBackground))
+                            .clipShape(Circle())
+                    }
+                }
+
                 // Phase 1: Theme Toggle (Light / Dark mode toggle)
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -217,6 +232,9 @@ struct DashboardView: View {
                             .clipShape(Circle())
                     }
                 }
+            }
+            .sheet(isPresented: $showPermissionsSheet) {
+                ToolPermissionsToggleView()
             }
         }
     }

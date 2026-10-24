@@ -24,8 +24,8 @@ final class AppleFoundationModelAgent: ObservableObject {
                 model: .default,
                 instructions: """
                 You are Folio's private on-device Agent running natively via Apple Foundation Models on Apple Silicon.
-                Assist the user with their documents, calculating metrics, identifying upcoming dates or warranties, and scheduling reminders and calendar events.
-                Be concise, accurate, and helpful.
+                Analyze user documents, extract structured dates, identify warranties and due dates, suggest events, and execute Calendar and Reminder tools safely.
+                Be concise, accurate, and respect user privacy.
                 """
             )
             self.isAvailable = true
@@ -39,7 +39,7 @@ final class AppleFoundationModelAgent: ObservableObject {
         let fullPrompt = """
         User Query: "\(userPrompt)"
 
-        User Documents Context:
+        User Documents & Events Context:
         \(vaultContext)
         """
         do {
@@ -52,11 +52,30 @@ final class AppleFoundationModelAgent: ObservableObject {
 }
 #endif
 
+// Staged tool action awaiting user approval
+struct StagedToolAction: Identifiable, Hashable {
+    let id: UUID = UUID()
+    let tool: AppleSystemTool
+    let title: String
+    let targetDate: Date
+    let notes: String
+    var status: ActionStatus = .pending
+    var duplicateDetected: Bool = false
+    var duplicateEventName: String? = nil
+
+    enum ActionStatus {
+        case pending
+        case approved
+        case denied
+    }
+}
+
 struct ChatMessage: Identifiable {
     let id = UUID()
     let isUser: Bool
     let text: String
     var toolActionExecuted: String? = nil
+    var stagedAction: StagedToolAction? = nil
 }
 
 struct AgentView: View {
@@ -65,18 +84,19 @@ struct AgentView: View {
     @State private var messages: [ChatMessage] = []
     @State private var isThinking = false
     @FocusState private var isInputFocused: Bool
+    @State private var showPermissionsSheet = false
 
-    // Check Apple Foundation Model availability
+    @ObservedObject private var permissionManager = ToolPermissionManager.shared
+
     var isModelConnected: Bool {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
             return AppleFoundationModelAgent.shared.isAvailable
         }
         #endif
-        return true // Fallback on-device compiled swift agent
+        return true
     }
 
-    // Exact 4 Quick Options from Phase 7:
     private let exactQuickOptions = [
         ("Set a reminder for a document", "bell.badge.fill"),
         ("Mark an event on Calendar", "calendar.badge.plus"),
@@ -84,18 +104,17 @@ struct AgentView: View {
         ("Calculate metrics from document", "chart.bar.xaxis")
     ]
 
-    // 3-4 Genuine General Quick Questions (not finance-heavy)
     private let generalQuestions = [
         "What documents are currently stored in my vault?",
         "Do I have any upcoming warranty or expiry dates?",
-        "Summarize my recently scanned documents",
-        "Which documents have payment or tax info?"
+        "Suggest calendar events from my documents",
+        "Summarize my recently scanned documents"
     ]
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // Header Subtitle: small line "Apple Foundation Models" with status dot
+                // Header Subtitle: "Apple Foundation Models" with status dot
                 HStack(spacing: 6) {
                     Circle()
                         .fill(isModelConnected ? Color.green : Color.red)
@@ -107,8 +126,20 @@ struct AgentView: View {
 
                     Spacer()
 
+                    // Tool Permissions toggle link
+                    Button {
+                        showPermissionsSheet = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "slider.horizontal.3")
+                            Text("Permissions")
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.primary)
+                    }
+
                     if isInputFocused || !messages.isEmpty {
-                        Button("Clear Chat") {
+                        Button("Clear") {
                             withAnimation {
                                 messages.removeAll()
                                 inputText = ""
@@ -117,13 +148,14 @@ struct AgentView: View {
                         }
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
+                        .padding(.leading, 6)
                     }
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 4)
                 .padding(.bottom, 10)
 
-                // Main Content
+                // Main Chat Scroll View
                 ScrollViewReader { proxy in
                     ScrollView(showsIndicators: false) {
                         VStack(spacing: 20) {
@@ -176,14 +208,13 @@ struct AgentView: View {
                                 }
                                 .padding(.horizontal, 16)
 
-                                // Phase 7: 3-4 Genuine General Quick Questions
+                                // Phase 7: Suggested Questions
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("SUGGESTED QUESTIONS")
                                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                                         .foregroundStyle(.secondary)
                                         .padding(.horizontal, 4)
 
-                                    // Soft tile list container with thin dividers
                                     VStack(spacing: 0) {
                                         ForEach(Array(generalQuestions.enumerated()), id: \.element) { index, question in
                                             Button {
@@ -211,8 +242,7 @@ struct AgentView: View {
                                             .buttonStyle(.plain)
 
                                             if index < generalQuestions.count - 1 {
-                                                Divider()
-                                                    .padding(.leading, 42)
+                                                Divider().padding(.leading, 42)
                                             }
                                         }
                                     }
@@ -227,19 +257,26 @@ struct AgentView: View {
                                 }
                                 .padding(.horizontal, 16)
                             } else {
-                                // Conversation Feed
+                                // Conversation Feed with Staged Action Cards & Duplicate Alerts
                                 LazyVStack(spacing: 14) {
                                     ForEach(messages) { msg in
-                                        ChatRow(message: msg)
-                                            .id(msg.id)
+                                        ChatRowView(
+                                            message: msg,
+                                            onApprove: { action, always in
+                                                handleUserApproval(messageId: msg.id, action: action, alwaysAllow: always)
+                                            },
+                                            onDeny: { action in
+                                                handleUserDenial(messageId: msg.id, action: action)
+                                            }
+                                        )
+                                        .id(msg.id)
                                     }
 
                                     if isThinking {
                                         HStack {
                                             HStack(spacing: 6) {
-                                                ProgressView()
-                                                    .controlSize(.small)
-                                                Text("Agent is thinking...")
+                                                ProgressView().controlSize(.small)
+                                                Text("Agent is analyzing...")
                                                     .font(.system(size: 12))
                                                     .foregroundStyle(.secondary)
                                             }
@@ -268,7 +305,7 @@ struct AgentView: View {
                     }
                 }
 
-                // Phase 7 Keyboard & Input: Clean, native, robust layout
+                // Input Bar with robust keyboard handling
                 VStack(spacing: 0) {
                     Divider()
 
@@ -308,15 +345,12 @@ struct AgentView: View {
             .navigationTitle("Agent")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // Phase 7: Back button at top left when typing or viewing query
                 if isInputFocused || !messages.isEmpty {
                     ToolbarItem(placement: .topBarLeading) {
                         Button {
                             withAnimation {
                                 isInputFocused = false
-                                if messages.isEmpty {
-                                    inputText = ""
-                                }
+                                if messages.isEmpty { inputText = "" }
                             }
                         } label: {
                             HStack(spacing: 4) {
@@ -328,6 +362,9 @@ struct AgentView: View {
                         }
                     }
                 }
+            }
+            .sheet(isPresented: $showPermissionsSheet) {
+                ToolPermissionsToggleView()
             }
         }
     }
@@ -362,67 +399,57 @@ struct AgentView: View {
         }
     }
 
-    // Phase 8: Agent Tool Calling & Dynamic Island completion
+    // MARK: - Phase 4: Folio Agent Tool Execution & Approval
     private func runAgentToolPipeline(for query: String) {
         let lower = query.lowercased()
 
-        if lower.contains("reminder") || lower.contains("remind") {
-            // Tool 1: Add a reminder on a given date
-            let doc = documents.first
-            let targetDate = doc?.expiryDate ?? Calendar.current.date(byAdding: .day, value: 7, to: .now) ?? .now
-            let title = doc != nil ? "Document Reminder: \(doc!.title)" : "Folio Vault Document Reminder"
-            let notes = "Scheduled by Folio Agent for verified document"
+        if lower.contains("permission") || lower.contains("settings") {
+            showPermissionsSheet = true
+            messages.append(ChatMessage(isUser: false, text: "Opened the Tool Permissions settings page for you. You can configure iOS Calendar and Reminders tool policies anytime."))
+            return
+        }
 
-            AgentSystemWriteService.scheduleReminder(title: title, date: targetDate, notes: notes)
+        if lower.contains("suggest") || lower.contains("event suggestion") {
+            // Proactive Event Suggestions based on Vault documents
+            let suggestions = generateEventSuggestions()
+            if suggestions.isEmpty {
+                messages.append(ChatMessage(isUser: false, text: "I analyzed your Vault: all active documents are up to date and no immediate event suggestions are needed right now."))
+            } else {
+                var reply = "Here are suggested events based on your documents:\n"
+                for s in suggestions {
+                    reply += "• **\(s.title)** — \(s.startDate.formatted(date: .long, time: .omitted))\n"
+                }
+                reply += "\nWould you like me to schedule any of these on your Calendar?"
+                messages.append(ChatMessage(isUser: false, text: reply))
+            }
+            return
+        }
 
-            messages.append(
-                ChatMessage(
-                    isUser: false,
-                    text: "I scheduled a reminder for **\(title)** on \(targetDate.formatted(date: .abbreviated, time: .shortened)).",
-                    toolActionExecuted: "Reminder Created"
-                )
-            )
-
-            // Dynamic Island completion animation
-            DynamicIslandManager.shared.showCompletion(
-                title: "Reminder Scheduled",
-                subtitle: targetDate.formatted(date: .abbreviated, time: .omitted)
-            )
-
-        } else if lower.contains("calendar") || lower.contains("event") {
-            // Tool 2: Create a calendar event
+        if lower.contains("calendar") || lower.contains("event") {
             let doc = documents.first
             let targetDate = doc?.expiryDate ?? Calendar.current.date(byAdding: .day, value: 3, to: .now) ?? .now
-            let title = doc != nil ? "Folio Event: \(doc!.title)" : "Folio Document Review"
-            let notes = "Created on iOS Calendar by Folio Agent"
+            let title = doc != nil ? "Warranty Expiry: \(doc!.title)" : "Folio Document Event"
+            let notes = "Scheduled by Folio Agent from on-device document"
 
-            AgentSystemWriteService.scheduleCalendarEvent(title: title, date: targetDate, notes: notes)
+            stageOrExecuteTool(tool: .calendar, title: title, date: targetDate, notes: notes)
 
-            messages.append(
-                ChatMessage(
-                    isUser: false,
-                    text: "Marked on your iOS Calendar: **\(title)** for \(targetDate.formatted(date: .long, time: .omitted)).",
-                    toolActionExecuted: "Event Added to Calendar"
-                )
-            )
+        } else if lower.contains("reminder") || lower.contains("remind") {
+            let doc = documents.first
+            let targetDate = doc?.expiryDate ?? Calendar.current.date(byAdding: .day, value: 7, to: .now) ?? .now
+            let title = doc != nil ? "Check Expiry: \(doc!.title)" : "Folio Document Reminder"
+            let notes = "Reminder created by Folio Agent"
 
-            // Dynamic Island completion animation
-            DynamicIslandManager.shared.showCompletion(
-                title: "Added to iOS Calendar",
-                subtitle: title
-            )
+            stageOrExecuteTool(tool: .reminders, title: title, date: targetDate, notes: notes)
 
         } else if lower.contains("expiry") || lower.contains("warranty") {
             let warranties = documents.filter { $0.kind == .warranty }
             if warranties.isEmpty {
-                messages.append(
-                    ChatMessage(isUser: false, text: "You currently have no warranty documents stored in your Vault. Tap Scan to add one.")
-                )
+                messages.append(ChatMessage(isUser: false, text: "No warranty documents found in your Vault. Tap the center scan button to add one."))
             } else {
                 var response = "Found **\(warranties.count)** warranty items:\n"
                 for w in warranties {
                     let days = w.daysUntilExpiry ?? 0
-                    response += "• **\(w.title)**: \(days >= 0 ? "\(days) days left" : "Expired") (Serial: \(w.serialOrInvoiceNo))\n"
+                    response += "• **\(w.title)**: \(days >= 0 ? "\(days) days remaining" : "Expired") (Serial: \(w.serialOrInvoiceNo))\n"
                 }
                 messages.append(ChatMessage(isUser: false, text: response))
             }
@@ -446,9 +473,7 @@ struct AgentView: View {
 
         } else {
             if documents.isEmpty {
-                messages.append(
-                    ChatMessage(isUser: false, text: "Your Vault is currently empty. Use the center scan button to add documents, and I can analyze them, set reminders, and track dates for you.")
-                )
+                messages.append(ChatMessage(isUser: false, text: "Your Vault is currently empty. Use the center scan button to add documents, and I will automatically extract dates, suggest events, and schedule reminders for you."))
             } else {
                 var text = "Here are the documents in your Vault:\n"
                 for doc in documents.prefix(5) {
@@ -457,6 +482,136 @@ struct AgentView: View {
                 messages.append(ChatMessage(isUser: false, text: text))
             }
         }
+    }
+
+    private func stageOrExecuteTool(tool: AppleSystemTool, title: String, date: Date, notes: String) {
+        if permissionManager.isDenied(tool: tool) {
+            messages.append(ChatMessage(isUser: false, text: "Action blocked: \(tool.rawValue) tool is set to 'Deny' in your permissions policy. Tap Permissions in the top right to change this."))
+            return
+        }
+
+        // Duplicate detection
+        var isDuplicate = false
+        var duplicateName: String? = nil
+        if tool == .calendar {
+            if let existing = AppleSystemIntegrationService.shared.findDuplicateEvent(title: title, date: date) {
+                isDuplicate = true
+                duplicateName = existing.title
+            }
+        }
+
+        if permissionManager.shouldAutoExecute(tool: tool) && !isDuplicate {
+            // Auto-execute if Always Allow is selected and not a duplicate
+            executeApprovedTool(tool: tool, title: title, date: date, notes: notes)
+        } else {
+            // Stage for user approval
+            let staged = StagedToolAction(
+                tool: tool,
+                title: title,
+                targetDate: date,
+                notes: notes,
+                duplicateDetected: isDuplicate,
+                duplicateEventName: duplicateName
+            )
+            let promptText = isDuplicate
+                ? "⚠️ **Duplicate Event Detected**: An event with this title already exists on your Calendar around this date. Would you like to proceed or skip?"
+                : "I have prepared the action to write to **\(tool.rawValue)**. Please approve below:"
+
+            messages.append(ChatMessage(isUser: false, text: promptText, stagedAction: staged))
+        }
+    }
+
+    private func handleUserApproval(messageId: UUID, action: StagedToolAction, alwaysAllow: Bool) {
+        if alwaysAllow {
+            if action.tool == .calendar {
+                permissionManager.calendarPolicy = .alwaysAllow
+            } else {
+                permissionManager.remindersPolicy = .alwaysAllow
+            }
+        }
+
+        if let idx = messages.firstIndex(where: { $0.id == messageId }) {
+            messages[idx].stagedAction?.status = .approved
+        }
+
+        executeApprovedTool(tool: action.tool, title: action.title, date: action.targetDate, notes: action.notes)
+    }
+
+    private func handleUserDenial(messageId: UUID, action: StagedToolAction) {
+        if let idx = messages.firstIndex(where: { $0.id == messageId }) {
+            messages[idx].stagedAction?.status = .denied
+        }
+        messages.append(ChatMessage(isUser: false, text: "Cancelled action for **\(action.title)**. Zero changes were made."))
+    }
+
+    private func executeApprovedTool(tool: AppleSystemTool, title: String, date: Date, notes: String) {
+        Task {
+            if tool == .calendar {
+                let result = await AppleSystemIntegrationService.shared.createCalendarEvent(
+                    title: title,
+                    date: date,
+                    notes: notes,
+                    forceAllowDuplicate: true
+                )
+                switch result {
+                case .success(let res):
+                    messages.append(
+                        ChatMessage(
+                            isUser: false,
+                            text: "Successfully added to your iOS Calendar (**\(res.calendarName)**) on \(res.scheduledDate.formatted(date: .long, time: .shortened)).",
+                            toolActionExecuted: "Event Added to Calendar"
+                        )
+                    )
+                    DynamicIslandManager.shared.showCompletion(title: "Added to iOS Calendar", subtitle: title)
+
+                case .failure(let err):
+                    messages.append(ChatMessage(isUser: false, text: "Failed to schedule event: \(err.localizedDescription)"))
+                }
+            } else {
+                let result = await AppleSystemIntegrationService.shared.createReminder(
+                    title: title,
+                    dueDate: date,
+                    notes: notes
+                )
+                switch result {
+                case .success(let res):
+                    messages.append(
+                        ChatMessage(
+                            isUser: false,
+                            text: "Successfully created in iOS Reminders (**\(res.calendarName)**) for \(res.scheduledDate.formatted(date: .long, time: .shortened)).",
+                            toolActionExecuted: "Reminder Created"
+                        )
+                    )
+                    DynamicIslandManager.shared.showCompletion(title: "Reminder Scheduled", subtitle: title)
+
+                case .failure(let err):
+                    messages.append(ChatMessage(isUser: false, text: "Failed to schedule reminder: \(err.localizedDescription)"))
+                }
+            }
+        }
+    }
+
+    private func generateEventSuggestions() -> [StructuredExtractedEvent] {
+        var suggestions: [StructuredExtractedEvent] = []
+        for doc in documents {
+            if let exp = doc.expiryDate, exp > Date.now {
+                suggestions.append(
+                    StructuredExtractedEvent(
+                        title: "Warranty Expiry: \(doc.title)",
+                        summary: "Serial \(doc.serialOrInvoiceNo) expires on \(exp.formatted(date: .abbreviated, time: .omitted))",
+                        startDate: exp,
+                        isAllDay: true,
+                        location: nil,
+                        eventType: .warrantyExpiry,
+                        amount: doc.primaryAmount,
+                        serialOrReference: doc.serialOrInvoiceNo,
+                        confidenceScore: 0.95,
+                        isPast: false
+                    )
+                )
+            }
+        }
+        return suggestions
     }
 
     private func buildVaultSummaryContext() -> String {
@@ -468,14 +623,17 @@ struct AgentView: View {
     }
 }
 
-struct ChatRow: View {
+// MARK: - Chat Row View with Staged Approval Card
+struct ChatRowView: View {
     let message: ChatMessage
+    let onApprove: (StagedToolAction, Bool) -> Void
+    let onDeny: (StagedToolAction) -> Void
 
     var body: some View {
         HStack {
             if message.isUser { Spacer(minLength: 40) }
 
-            VStack(alignment: message.isUser ? .trailing : .leading, spacing: 6) {
+            VStack(alignment: message.isUser ? .trailing : .leading, spacing: 8) {
                 if let tool = message.toolActionExecuted {
                     HStack(spacing: 4) {
                         Image(systemName: "checkmark.circle.fill")
@@ -490,6 +648,104 @@ struct ChatRow: View {
                     .font(.system(size: 14))
                     .foregroundStyle(message.isUser ? Color.white : Color.primary)
                     .lineSpacing(2)
+
+                // Staged User-Approved Action Card (Phase 4)
+                if let action = message.stagedAction {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Image(systemName: action.tool.icon)
+                                .font(.system(size: 14))
+                                .foregroundStyle(.blue)
+                            Text(action.tool.rawValue.uppercased())
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+
+                            if action.duplicateDetected {
+                                Text("DUPLICATE")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.orange.opacity(0.18))
+                                    .foregroundStyle(.orange)
+                                    .clipShape(Capsule())
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(action.title)
+                                .font(.system(size: 13, weight: .semibold))
+                            Text(action.targetDate.formatted(date: .long, time: .shortened))
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if action.status == .pending {
+                            HStack(spacing: 8) {
+                                Button {
+                                    onApprove(action, false)
+                                } label: {
+                                    Text("Allow Once")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(Color.primary)
+                                        .foregroundStyle(Color(uiColor: .systemBackground))
+                                        .clipShape(Capsule())
+                                }
+
+                                Button {
+                                    onApprove(action, true)
+                                } label: {
+                                    Text("Always Allow")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(Color(uiColor: .systemGray5))
+                                        .foregroundStyle(.primary)
+                                        .clipShape(Capsule())
+                                }
+
+                                Button {
+                                    onDeny(action)
+                                } label: {
+                                    Text("Deny")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(Color.red.opacity(0.12))
+                                        .foregroundStyle(.red)
+                                        .clipShape(Capsule())
+                                }
+                            }
+                        } else if action.status == .approved {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .foregroundStyle(.green)
+                                Text("Approved & Executed")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.green)
+                            }
+                        } else {
+                            HStack(spacing: 4) {
+                                Image(systemName: "xmark.circle")
+                                    .foregroundStyle(.secondary)
+                                Text("Denied by User")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color(uiColor: .systemBackground))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                    )
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -503,34 +759,78 @@ struct ChatRow: View {
     }
 }
 
-enum AgentSystemWriteService {
-    static func scheduleReminder(title: String, date: Date, notes: String) {
-        let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
-            guard granted else { return }
-            let content = UNMutableNotificationContent()
-            content.title = title
-            content.body = notes
-            content.sound = .default
+// MARK: - Phase 4: Dedicated Tool Permissions Toggle Page
+struct ToolPermissionsToggleView: View {
+    @ObservedObject private var manager = ToolPermissionManager.shared
+    @Environment(\.dismiss) private var dismiss
 
-            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5, repeats: false)
-            let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger)
-            center.add(req)
-        }
-    }
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Image(systemName: "calendar.badge.plus")
+                                .font(.system(size: 18))
+                                .foregroundStyle(.blue)
+                            Text("iOS Calendar Tool")
+                                .font(.system(size: 15, weight: .semibold))
+                        }
 
-    static func scheduleCalendarEvent(title: String, date: Date, notes: String) {
-        Task {
-            let store = EKEventStore()
-            let granted = (try? await store.requestFullAccessToEvents()) ?? false
-            if granted, let defaultCal = store.defaultCalendarForNewEvents {
-                let event = EKEvent(eventStore: store)
-                event.title = title
-                event.notes = notes
-                event.startDate = date
-                event.endDate = date.addingTimeInterval(3600)
-                event.calendar = defaultCal
-                try? store.save(event, span: .thisEvent)
+                        Text("Controls whether Folio Agent can create native Calendar events automatically or must ask for confirmation.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+
+                        Picker("Policy", selection: $manager.calendarPolicy) {
+                            ForEach(ToolPermissionPolicy.allCases, id: \.self) { policy in
+                                Text(policy.rawValue).tag(policy)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    .padding(.vertical, 4)
+                } header: {
+                    Text("Calendar Actions")
+                }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Image(systemName: "bell.badge.fill")
+                                .font(.system(size: 18))
+                                .foregroundStyle(.orange)
+                            Text("iOS Reminders Tool")
+                                .font(.system(size: 15, weight: .semibold))
+                        }
+
+                        Text("Controls whether Folio Agent can schedule reminders and local notifications.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+
+                        Picker("Policy", selection: $manager.remindersPolicy) {
+                            ForEach(ToolPermissionPolicy.allCases, id: \.self) { policy in
+                                Text(policy.rawValue).tag(policy)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    .padding(.vertical, 4)
+                } header: {
+                    Text("Reminders Actions")
+                }
+
+                Section {
+                    Text("Folio strictly executes tools on-device through Apple EventKit with zero telemetry or cloud transmission.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Tool Permissions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
             }
         }
     }

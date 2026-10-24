@@ -139,7 +139,6 @@ enum CryptoProofService {
 enum SampleVaultSeeder {
     @MainActor
     static func seedIfNeeded(context: ModelContext) {
-        // Purge mock/fake data from previous builds so the vault only holds genuine user data
         purgeMockData(context: context)
     }
 
@@ -148,7 +147,6 @@ enum SampleVaultSeeder {
         let descriptor = FetchDescriptor<FolioDocument>()
         if let docs = try? context.fetch(descriptor) {
             for doc in docs {
-                // Remove legacy sample docs identified by sample serial patterns
                 if doc.serialOrInvoiceNo.hasPrefix("EMP-941") ||
                    doc.serialOrInvoiceNo.hasPrefix("INV-2026-") ||
                    doc.serialOrInvoiceNo.hasPrefix("SN-C02X") ||
@@ -163,7 +161,7 @@ enum SampleVaultSeeder {
     }
 }
 
-// Auto-Categorizer: reads the actual document text and ensures no document is left uncategorized.
+// MARK: - Phase 1 & 2: Document Auto Categorizer with Date Intelligence
 enum DocumentAutoCategorizer {
     struct AnalyzedResult {
         let kind: DocumentKind
@@ -175,13 +173,17 @@ enum DocumentAutoCategorizer {
         let documentDate: Date
         let expiryDate: Date?
         let foundDates: [Date]
+        let extractedEvents: [StructuredExtractedEvent]
+        var summary: String {
+            extractedEvents.first?.summary ?? ""
+        }
     }
 
     static func analyze(text: String) -> AnalyzedResult {
         let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let upper = cleanText.uppercased()
 
-        // 1. Determine Category from text keywords
+        // 1. Determine Category from text keywords (No document left uncategorized)
         let kind: DocumentKind
         if upper.contains("WARRANTY") || upper.contains("GUARANTEE") || upper.contains("SERIAL NO") ||
            upper.contains("APPLECARE") || upper.contains("EXPIRY") || upper.contains("HARDWARE") ||
@@ -192,7 +194,6 @@ enum DocumentAutoCategorizer {
                   upper.contains("BASIC PAY") || upper.contains("CTC") || upper.contains("TDS") {
             kind = .payslip
         } else {
-            // Default to tax invoice / receipt: every document is categorized
             kind = .taxInvoice
         }
 
@@ -201,16 +202,18 @@ enum DocumentAutoCategorizer {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty && $0.count > 2 }
 
-        var title = "Scanned Document"
+        var title = "\(kind.rawValue) Document"
         if let firstLine = lines.first {
-            title = firstLine.replacingOccurrences(of: "WARRANTY CARD:", with: "")
-                             .replacingOccurrences(of: "TAX INVOICE:", with: "")
-                             .replacingOccurrences(of: "PAYSLIP:", with: "")
-                             .trimmingCharacters(in: .whitespaces)
-            if title.isEmpty { title = "\(kind.rawValue) Document" }
+            let candidate = firstLine.replacingOccurrences(of: "WARRANTY CARD:", with: "")
+                                    .replacingOccurrences(of: "TAX INVOICE:", with: "")
+                                    .replacingOccurrences(of: "PAYSLIP:", with: "")
+                                    .trimmingCharacters(in: .whitespaces)
+            if !candidate.isEmpty {
+                title = candidate
+            }
         }
 
-        // 3. Extract Amounts using regex
+        // 3. Extract Amounts
         var primary: Double = 0
         var secondary: Double = 0
         let numberPattern = #"(\d[\d,]*\.?\d*)"#
@@ -220,7 +223,7 @@ enum DocumentAutoCategorizer {
                 guard let range = Range(match.range, in: cleanText) else { return nil }
                 let cleaned = cleanText[range].replacingOccurrences(of: ",", with: "")
                 return Double(cleaned)
-            }.filter { $0 >= 50 } // Filter out small trivial indices
+            }.filter { $0 >= 50 }
 
             if let maxVal = numbers.max() {
                 primary = maxVal
@@ -249,26 +252,67 @@ enum DocumentAutoCategorizer {
             }
         }
 
-        // 5. Detect Dates & Expiry
+        // 5. Date Intelligence Engine (Missing-year resolution, past-event detection, timezone)
         var foundDates: [Date] = []
-        let dateDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
-        let dateMatches = dateDetector?.matches(in: cleanText, options: [], range: NSRange(cleanText.startIndex..., in: cleanText)) ?? []
-        for match in dateMatches {
-            if let date = match.date {
-                foundDates.append(date)
+        var expiryDate: Date? = nil
+        var structuredEvents: [StructuredExtractedEvent] = []
+
+        // Extract dates with DateIntelligenceEngine
+        if let resolved = DateIntelligenceEngine.resolveDate(rawDateString: cleanText, documentType: kind) {
+            foundDates.append(resolved.date)
+
+            if kind == .warranty {
+                expiryDate = resolved.date
+                structuredEvents.append(
+                    StructuredExtractedEvent(
+                        title: "Warranty Expiry: \(title)",
+                        summary: "Product coverage ends on \(resolved.date.formatted(date: .long, time: .omitted)) (Serial: \(serial)).",
+                        startDate: resolved.date,
+                        isAllDay: true,
+                        location: "Authorized Service Center",
+                        eventType: .warrantyExpiry,
+                        amount: primary,
+                        serialOrReference: serial,
+                        confidenceScore: resolved.confidence,
+                        isPast: resolved.isPast
+                    )
+                )
+            } else if kind == .taxInvoice {
+                structuredEvents.append(
+                    StructuredExtractedEvent(
+                        title: "Payment / Bill Due: \(title)",
+                        summary: "Payment due for invoice \(serial) of \(primary > 0 ? "₹\(Int(primary))" : "recorded amount").",
+                        startDate: resolved.date,
+                        isAllDay: true,
+                        location: nil,
+                        eventType: .paymentDue,
+                        amount: primary,
+                        serialOrReference: serial,
+                        confidenceScore: resolved.confidence,
+                        isPast: resolved.isPast
+                    )
+                )
+            } else if kind == .payslip {
+                structuredEvents.append(
+                    StructuredExtractedEvent(
+                        title: "Salary Credit: \(title)",
+                        summary: "Monthly salary disbursement recorded on \(resolved.date.formatted(date: .long, time: .omitted)).",
+                        startDate: resolved.date,
+                        isAllDay: true,
+                        location: nil,
+                        eventType: .salaryCredit,
+                        amount: primary,
+                        serialOrReference: serial,
+                        confidenceScore: resolved.confidence,
+                        isPast: resolved.isPast
+                    )
+                )
             }
         }
 
         let docDate = foundDates.first ?? Date.now
-        var expiryDate: Date? = nil
-
-        if kind == .warranty {
-            if let futureDate = foundDates.first(where: { $0 > Date.now }) {
-                expiryDate = futureDate
-            } else {
-                // Default warranty 1 year from docDate
-                expiryDate = Calendar.current.date(byAdding: .year, value: 1, to: docDate)
-            }
+        if kind == .warranty && expiryDate == nil {
+            expiryDate = Calendar.current.date(byAdding: .year, value: 1, to: docDate)
         }
 
         let code = "\(kind.codePrefix).\(String(title.prefix(4)).uppercased().filter { $0.isLetter })"
@@ -282,7 +326,8 @@ enum DocumentAutoCategorizer {
             serialOrRef: serial,
             documentDate: docDate,
             expiryDate: expiryDate,
-            foundDates: foundDates
+            foundDates: foundDates,
+            extractedEvents: structuredEvents
         )
     }
 }
