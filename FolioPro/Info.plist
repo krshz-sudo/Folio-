@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Folio Pro</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Folio scans warranties, payslips, and GST invoices completely on-device.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Folio uses Face ID to lock your financial vault on-device.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Folio schedules confirmed warranty expiry alerts on your calendar.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Folio schedules confirmed warranty expiry alerts on your calendar.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Folio creates confirmed reminders before warranties or tax deadlines expire.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Folio creates confirmed reminders before warranties or tax deadlines expire.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Import receipt photos for on-device OCR extraction.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>
